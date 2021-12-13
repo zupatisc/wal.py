@@ -55,9 +55,11 @@ def newwp(*, data_frame, wallpapers_path, view):
     data_frame = update(dir=Path(wallpapers_path), df=data_frame, view=view) # Populate DataFrame
 
     picture_name = []
-    picture_name, local_view, _ = getAttributes(data_frame.sample(n=1)["Picture"].values[0], data_frame)
-    if view is None:
-        view = local_view
+    ignore = 1
+    while ignore == 1:
+        picture_name, local_view, ignore = getAttributes(data_frame.sample(n=1)["Picture"].values[0], data_frame)
+        if view is None:
+            view = local_view
 
     p = runfeh(wallpapers_path=wallpapers_path, picture_name=b64String(picture_name), view=view)
     return p
