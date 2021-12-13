@@ -1,7 +1,6 @@
 # Wrapper around feh to better deal with different
 # wallpaper dimensions and preferences
 
-# TODO: eliminate the ugly and confusing globals
 import re
 import argparse
 import subprocess
@@ -12,94 +11,79 @@ from subprocess import Popen
 from pathlib import Path
 import pandas as pd
 
-# dir = Path("~/Pictures/Wallpapers").expanduser().__str__()
-_view = None
-_mode = ["", "--no-xinerama"]
 _columns = ["Picture", "view", "ignore"]
-_path = None
 
 # Hashes given path and uses it as name for new csv
-def generate(dir):
-    global _path
+def generate(*, dir, view, config_dir):
 
-    hash = base64.b64encode(bytes(dir.expanduser().__str__(), "utf-8")).decode("utf-8")
-    path = Path("~/.config/wal/" + hash + ".csv").expanduser()
-    _path = path
+    hash = stringB64(dir.expanduser().__str__())
+    path = Path(config_dir + "/" +  hash + ".csv")
 
-    print(base64.b64decode(bytes(hash, "utf-8")).decode("utf-8"))
 
-    if Path("~/.config/wal").expanduser().exists() is not True:
-        Path("~/.config/wal").expanduser().mkdir()
+    # TODO: Maybe move check and creation of config dir to main
+    if Path(config_dir).exists() is not True:
+        Path(config_dir).mkdir()
     if path.exists():
         raise ValueError("CSV for this directory already exists")
 
     df = pd.DataFrame(columns=_columns)
-    df = update(dir, df) # Populate DataFrame
+    df = update(dir=dir.expanduser(), df=df, view=view) # Populate DataFrame
     df.to_csv(path)
 
 
 # Cull current wallpaper(taken from .fehbg)
-def cull(): # TODO: Method to un-cull maybe
-    global _path
+def cull(*, data_frame, csv_path): # TODO: Method to un-cull maybe
 
-    df = pd.read_csv(_path, index_col=0)
-    dir, (name, hash) = getPaths()
-    setAttributes(hash, df, ignore=1)
+    _, hash = getFileHandles()
+    setAttributes(picture_name=hash, data_frame=data_frame, view=None, csv_path=csv_path, ignore=1)
 
 
 # Reload current Wallpaper(for usage with -s or -m)
-def reload(): # TODO: Will break when neither -s nor -m is given
-    global _path
-    global _view
+def reload(*, data_frame, wallpapers_path, csv_path, view):
 
-    dir, (name, hash) = getPaths()
-    print(dir.__str__() + "/" + name)
-    df = pd.read_csv(_path, index_col=0)
-    p = runfeh(dir, name)
-    setAttributes(hash, df)
+    name, hash = getFileHandles()
+    if view is None:
+        _, view, _ = getAttributes(name, data_frame)
+
+    p = runfeh(wallpapers_path=wallpapers_path, picture_name=name, view=view)
+    setAttributes(picture_name=hash, data_frame=data_frame, view=view, csv_path=csv_path)
     return p
 
 
 # Load new Wallpaper from directory
-def newwp():
-    global _path
-    global _view
+def newwp(*, data_frame, wallpapers_path, view):
+    data_frame = update(dir=Path(wallpapers_path), df=data_frame, view=view) # Populate DataFrame
 
-    df = pd.read_csv(_path, index_col=0)
-    dir, (name, hash) = getPaths()
+    picture_name = []
+    picture_name, local_view, _ = getAttributes(data_frame.sample(n=1)["Picture"].values[0], data_frame)
+    if view is None:
+        view = local_view
 
-    if _view is None:
-        picture, view, ignore = getAttributes(base64.b64decode(bytes(df.sample(n=1)["Picture"].values[0], "utf-8")).decode("utf-8"), df)
-        _view = view
-
-    p = runfeh(dir, base64.b64decode(bytes(df.sample(n=1)["Picture"].values[0], "utf-8")).decode("utf-8"))
+    p = runfeh(wallpapers_path=wallpapers_path, picture_name=b64String(picture_name), view=view)
     return p
 
 
 # Given a dir and a DataFrame this will fill the DataFrame with all entries not already in the csv
-def update(dir, df):
-    path = dir.expanduser()
-    items = [x.name for x in path.iterdir() if x.is_file()]
+def update(*, dir, df, view):
+    items = [x.name for x in dir.iterdir() if x.is_file()]
 
-    df2 = pd.concat([pd.DataFrame({"Picture": base64.b64encode(bytes(item, "utf-8")).decode("utf-8"), "view":_view, "ignore":0}, index=[x], columns=_columns) for (x, item) in enumerate(items)], ignore_index=True)
+    df2 = pd.concat([pd.DataFrame({"Picture": stringB64(item), "view":view, "ignore":0}, index=[x], columns=_columns) for (x, item) in enumerate(items)], ignore_index=True)
     df = df.append(df2[~df2.isin(df)].dropna())
 
     return df
 
 
 # Get image directory and name/hash of current picture
-def getPaths():
-    global _path
+def getFileHandles():
     regex = re.compile(r"'([^']*)'")
 
-    full_path = base64.b64decode(bytes(_path.name.split(".")[0], "utf-8")).decode("utf-8")
     file_name = []
     with open(Path("~/.fehbg").expanduser(), "r") as f:
         text = f.read()
         file_name = regex.findall(text)[0].split("/")[-1]
-    file_hash = base64.b64encode(bytes(file_name, "utf-8")).decode("utf-8")
+    file_hash = stringB64(file_name)
 
-    return full_path, (file_name, file_hash)
+    return file_name, file_hash
 
 
 # Get attributes of image per the loaded csv
@@ -110,32 +94,42 @@ def getAttributes(picture_name, df):
 
 
 # Set attributes of image in the loaded csv
-def setAttributes(picture_name, df, *, ignore=None):
-    global _view
-    global _path
+def setAttributes(*, picture_name, data_frame, view, csv_path, ignore=None):
+    if view is not None:
+        data_frame.loc[data_frame["Picture"] == picture_name, "view"] = view
 
-    df.loc[df["Picture"] == picture_name, "view"] = _view
     if ignore is not None:
-        df.loc[df["Picture"] == picture_name, "ignore"] = ignore
-    df.to_csv(_path)
+        data_frame.loc[data_frame["Picture"] == picture_name, "ignore"] = ignore
+    data_frame.to_csv(csv_path)
 
 
-def runfeh(dir, name):
-    if _view == 0:
-        p = Popen(["feh", "--bg-scale", dir + "/" + name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def runfeh(*, wallpapers_path, picture_name, view):
+    if view == 0:
+        p = Popen(["feh", "--bg-scale", wallpapers_path + "/" + picture_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while p.poll() is None:
             time.sleep(0.5)
         return p.returncode
-    elif _view == 1:
-        p = Popen(["feh", "--bg-scale", _mode[_view], dir + "/" + name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif view == 1:
+        p = Popen(["feh", "--bg-scale", "--no-xinerama", wallpapers_path + "/" + picture_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while p.poll() is None:
             time.sleep(0.5)
         return p.returncode
+
+
+# Returns a plain text string from base64
+def b64String(input):
+    if isinstance(input, str):
+        return base64.b64decode(bytes(input, "utf-8")).decode("utf-8")
+    elif isinstance(input, pd.DataFrame):
+        return base64.b64decode(bytes(input[0], "utf-8")).decode("utf-8")
+
+
+# Returns base64 encoded string
+def stringB64(input):
+    return base64.b64encode(bytes(input, "utf-8")).decode("utf-8")
 
 
 def main():
-    global _path
-    global _view
 
     parser = argparse.ArgumentParser()
     monitor_group = parser.add_mutually_exclusive_group()
@@ -150,37 +144,37 @@ def main():
 
     args = parser.parse_args()
 
-    # _view is set to 0 by default at the top of the file
-    # TODO: Don't default so I know what values to actually pull from the csv
+    view = None
     if args.single is True:
-        _view = 1
+        view = 1
     elif args.multiple is True:
-        _view = 0
+        view = 0
 
-    for file in Path(os.environ.get("XDG_CONFIG_DIR", "~/.config/wal")).expanduser().glob("*.csv"): # TODO: Mark last modified csv and use it instead of picking the last one the iterator coughs up
-        _path = file
-    if _path is None and args.generate is None:
+    data_frame = []
+    wallpapers_path = []
+    csv_path = []
+    config_dir = Path(os.environ.get("XDG_CONFIG_DIR", "~/.config") + "/wal").expanduser()
+    if args.generate is None:
+        for file in config_dir.glob("*.csv"): # TODO: Mark last modified csv and use it instead of picking the last one the iterator coughs up
+            data_frame = pd.read_csv(file, index_col=0)
+            wallpapers_path = b64String(file.name.split(".")[0])
+            csv_path = config_dir.__str__() + "/" + file.name
+    if data_frame is None and args.generate is None:
         raise ValueError("No configured csv found")
 
-    # TODO: Open DataFrame here and pass with dir Path directly to functions along with view
-
     if args.new:
-        newwp()
+        newwp(data_frame=data_frame, wallpapers_path=wallpapers_path, view=view)
     elif args.reload:
-        reload()
+        reload(data_frame=data_frame, wallpapers_path=wallpapers_path, csv_path=csv_path, view=view)
     elif args.cull:
-        cull()
+        cull(data_frame=data_frame, csv_path=csv_path)
     elif args.generate is not None:
-        generate(Path(args.generate))
+        if view is None:
+            view = 0
+        generate(dir=Path(args.generate), view=view, config_dir=config_dir.__str__())
 
-    # for p in programs:
-    #     Popen(['nohup', p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    #     print(f"Started {p}")
-    # df = pd.read_csv("~/.config/wal/e11b29f470cd8d2cd6c4c117a4a5dad34a30efb55dbd019d2197d1f24b2383df.csv")
-    # print(df.shape)
-    # df = update(dir, df)
-    # print(df.shape)
     print("Finished")
+    return 0
 
 if __name__ == "__main__":
     main()
