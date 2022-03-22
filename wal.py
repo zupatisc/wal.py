@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 _columns = ["Picture", "view", "ignore"]
+_verbose = False
 
 # Hashes given path and uses it as name for new csv
 def generate(*, dir, view, config_dir):
@@ -43,16 +44,18 @@ def reload(*, data_frame, wallpapers_path, csv_path, view):
 
     name, hash = getFileHandles()
     if view is None:
-        _, view, _ = getAttributes(name, data_frame)
+        _, view, _ = getAttributes(hash, data_frame)
 
     p = runfeh(wallpapers_path=wallpapers_path, picture_name=name, view=view)
     setAttributes(picture_name=hash, data_frame=data_frame, view=view, csv_path=csv_path)
+
+    if _verbose:
+        print(f"Picture {name} reloaded with view setting {view}")
     return p
 
 
 # Load new Wallpaper from directory
 def newwp(*, data_frame, wallpapers_path, view):
-    data_frame = update(dir=Path(wallpapers_path), df=data_frame, view=view) # Populate DataFrame
 
     picture_name = []
     ignore = 1
@@ -63,6 +66,11 @@ def newwp(*, data_frame, wallpapers_path, view):
 
     p = runfeh(wallpapers_path=wallpapers_path, picture_name=b64String(picture_name), view=view)
     return p
+
+
+def refresh(*, data_frame, wallpapers_path, view, csv_path):
+        data_frame = update(dir=Path(wallpapers_path), df=data_frame, view=view)
+        data_frame.to_csv(csv_path)
 
 
 # Given a dir and a DataFrame this will fill the DataFrame with all entries not already in the csv
@@ -143,8 +151,12 @@ def main():
     file_group.add_argument("-r", "--reload", help="Reload the current wallpaper", action="store_true")
     file_group.add_argument("-c", "--cull", help="Cull wallpaper from the selection and pick a new one", action="store_true")
     file_group.add_argument("-g", "--generate", help="Accepts path to new wallpaper directory and generates a new csv for it", default=None, type=str)
+    file_group.add_argument("-u", "--update", help="Update the csv with potential new wallpapers in the directory", action="store_true")
+    parser.add_argument("-v", "--verbose", help="Print certain metrics", action="store_true")
 
     args = parser.parse_args()
+    global _verbose
+    _verbose = args.verbose
 
     view = None
     if args.single is True:
@@ -164,6 +176,9 @@ def main():
     if data_frame is None and args.generate is None:
         raise ValueError("No configured csv found")
 
+    if _verbose:
+        print(f"Chosen csv file: {csv_path}\nWallpaper dir: {wallpapers_path}")
+
     if args.new:
         newwp(data_frame=data_frame, wallpapers_path=wallpapers_path, view=view)
     elif args.reload:
@@ -174,8 +189,11 @@ def main():
         if view is None:
             view = 0
         generate(dir=Path(args.generate), view=view, config_dir=config_dir.__str__())
+    elif args.update:
+        refresh(data_frame=data_frame, wallpapers_path=wallpapers_path, view=view, csv_path=csv_path)
 
-    print("Finished")
+    if _verbose:
+        print("Finished")
     return 0
 
 if __name__ == "__main__":
