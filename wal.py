@@ -27,8 +27,8 @@ def generate(*, dir, view, config_dir):
     if path.exists():
         raise ValueError("CSV for this directory already exists")
 
-    df = pd.DataFrame(columns=_columns)
-    df = update(dir=dir.expanduser(), df=df, view=view) # Populate DataFrame
+    # df = pd.DataFrame(columns=_columns)
+    df = update(dir=dir.expanduser(), view=view) # Populate DataFrame
     df.to_csv(path)
 
 
@@ -69,18 +69,20 @@ def newwp(*, data_frame, wallpapers_path, view):
 
 
 def refresh(*, data_frame, wallpapers_path, view, csv_path):
-        data_frame = update(dir=Path(wallpapers_path), df=data_frame, view=view)
-        data_frame.to_csv(csv_path)
+        df = update(dir=Path(wallpapers_path), view=view)
+        updated_df = pd.concat([data_frame, df[~df.isin(data_frame)].dropna()], ignore_index=True)
+        updated_df.to_csv(csv_path)
 
 
 # Given a dir and a DataFrame this will fill the DataFrame with all entries not already in the csv
-def update(*, dir, df, view):
+def update(*, dir, view):
     items = [x.name for x in dir.iterdir() if x.is_file()]
 
     df2 = pd.concat([pd.DataFrame({"Picture": stringB64(item), "view":view, "ignore":0}, index=[x], columns=_columns) for (x, item) in enumerate(items)], ignore_index=True)
-    df = df.append(df2[~df2.isin(df)].dropna())
+    # df = pd.concat([df, df2[~df2.isin(df)].dropna()], ignore_index=True)
+    # df = df.append(df2[~df2.isin(df)].dropna())
 
-    return df
+    return df2
 
 
 # Get image directory and name/hash of current picture
@@ -190,6 +192,8 @@ def main():
             view = 0
         generate(dir=Path(args.generate), view=view, config_dir=config_dir.__str__())
     elif args.update:
+        if view is None:
+            view = 0
         refresh(data_frame=data_frame, wallpapers_path=wallpapers_path, view=view, csv_path=csv_path)
 
     if _verbose:
